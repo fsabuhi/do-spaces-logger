@@ -1,0 +1,17 @@
+timezone = "Asia/Baku"
+sync_minutes = 15
+request_retention_days = 30
+rollup_retention_days = 396
+
+[[logs]]
+region = "fra1"
+# The destination bucket and prefix that contain .gz access-log objects.
+bucket = "your-spaces-log-bucket"
+prefix = "access-logs/"
+
+# Origin logs contain the monitored bucket name, so no source name is needed.
+# Set this only for CDN logs served through a custom hostname that cannot be
+# mapped back to a bucket automatically:
+# source_bucket = "your-source-bucket"
+
+# Add another [[logs]] block for each destination bucket/region.

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Settings · Spaces Logger{% endblock %}
+{% block content %}
+<div class="heading"><div><h1>Settings</h1><p>Sources are configured in TOML; alert thresholds live in SQLite.</p></div></div>
+<div class="grid">
+  <section class="panel"><h2>Log locations</h2><ul class="sources">{% for source in sources %}<li><b>{{ source.log_bucket }}/{{ source.log_prefix }}</b><span>{{ source.region }} · {{ source.source_bucket or 'source bucket read from each log record' }}</span></li>{% else %}<li>No log locations configured.</li>{% endfor %}</ul></section>
+  <section class="panel"><h2>Destinations</h2><p>Slack: <b>{{ 'configured' if slack_enabled else 'not configured' }}</b></p><p class="muted">Use the protected API to send a test alert or trigger a manual sync.</p></section>
+</div>
+<section class="panel"><h2>Bandwidth thresholds</h2><div class="table-wrap"><table><thead><tr><th>Name</th><th>Bucket</th><th>Limit</th><th></th></tr></thead><tbody>
+{% for threshold in thresholds %}<tr><td>{{ threshold.name }}</td><td>{{ threshold.bucket or 'All buckets' }}</td><td>{{ threshold.limit_bytes|gib }}</td><td><form method="post" action="/settings/thresholds/{{ threshold.id }}/delete"><button class="danger">Delete</button></form></td></tr>{% endfor %}
+</tbody></table></div>
+<form class="add" method="post" action="/settings/thresholds"><label>Name<input required maxlength="100" name="name"></label><label>Bucket (blank = all)<input name="bucket"></label><label>Limit GiB<input required min="0.01" step="0.01" type="number" name="limit_gib"></label><button>Add threshold</button></form>
+</section>
+{% endblock %}

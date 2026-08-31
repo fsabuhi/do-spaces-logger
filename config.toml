@@ -1,0 +1,10 @@
+timezone = "Asia/Baku"
+sync_minutes = 15
+request_retention_days = 30
+rollup_retention_days = 396
+aws_profile = "do-tor1"
+
+[[logs]]
+region = "fra1"
+bucket = "200softest"
+prefix = "access-logs/"

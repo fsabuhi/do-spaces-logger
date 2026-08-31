@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -110,6 +110,123 @@ def _summary(database: Database, period: str) -> dict:
     return data
 
 
+def _escape(value: object) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _labels(**pairs: object) -> str:
+    return "{" + ",".join(f'{key}="{_escape(value)}"' for key, value in pairs.items()) + "}" if pairs else ""
+
+
+def _metrics(database: Database) -> str:
+    """Render the Prometheus text exposition format so external tooling can scrape usage."""
+    # ponytail: one SQL pass per scrape, no cache - add caching if the scrape interval drops below 30s.
+    now = datetime.now(timezone.utc)
+    month = _start_for("month").isoformat()
+    lines: list[str] = []
+
+    def family(name: str, help_text: str, samples: list[tuple[str, float | None]]) -> None:
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} gauge")
+        lines.extend(f"{name}{labels} {'NaN' if value is None else value}" for labels, value in samples)
+
+    usage = database.query(
+        """SELECT bucket, source, SUM(bytes_out) bytes_out, SUM(requests) requests
+        FROM hourly_usage WHERE hour >= ? GROUP BY bucket, source""",
+        (month,),
+    )
+    family(
+        "spaces_month_bytes_out",
+        "Bytes served month-to-date.",
+        [(_labels(bucket=row["bucket"], source=row["source"]), row["bytes_out"]) for row in usage],
+    )
+    family(
+        "spaces_month_requests",
+        "Requests served month-to-date.",
+        [(_labels(bucket=row["bucket"], source=row["source"]), row["requests"]) for row in usage],
+    )
+
+    family(
+        "spaces_threshold_limit_bytes",
+        "Configured monthly bandwidth threshold; an empty bucket label means all buckets.",
+        [
+            (_labels(name=row["name"], bucket=row["bucket"] or ""), row["limit_bytes"])
+            for row in database.query("SELECT name, bucket, limit_bytes FROM thresholds WHERE enabled=1")
+        ],
+    )
+
+    recent = database.query(
+        "SELECT status/100 status_class, COUNT(*) requests FROM request_events WHERE occurred_at >= ? GROUP BY 1",
+        ((now - timedelta(minutes=15)).isoformat(),),
+    )
+    family(
+        "spaces_recent_requests",
+        "Requests in the last 15 minutes, by status class.",
+        [(_labels(status_class=row["status_class"]), row["requests"]) for row in recent],
+    )
+
+    cache = database.query(
+        """SELECT COALESCE(SUM(CASE WHEN cache_result IN ('Hit','RefreshHit') THEN requests ELSE 0 END),0) hits,
+        COALESCE(SUM(requests),0) total FROM hourly_usage WHERE hour >= ? AND source='cdn'""",
+        (month,),
+    )[0]
+    family(
+        "spaces_cdn_cache_hit_ratio",
+        "CDN cache hit ratio month-to-date.",
+        [("", cache["hits"] / cache["total"] if cache["total"] else None)],
+    )
+
+    period = now.strftime("%Y-%m")
+    billing = database.query(
+        """SELECT COALESCE(SUM(usage_bytes),0) usage_bytes, COALESCE(SUM(CAST(amount_usd AS REAL)),0) amount_usd,
+        MAX(observed_at) observed_at FROM billing_records
+        WHERE period=? AND observed_at=(SELECT MAX(observed_at) FROM billing_records WHERE period=?)""",
+        (period,) * 2,
+    )[0]
+    billed = billing["usage_bytes"] if billing["observed_at"] else None
+    family(
+        "spaces_billing_usage_bytes",
+        "Bandwidth bytes reported by the DigitalOcean Billing API.",
+        [(_labels(period=period), billed)],
+    )
+    family(
+        "spaces_billing_amount_usd",
+        "Spaces bandwidth charges reported by the DigitalOcean Billing API.",
+        [(_labels(period=period), billing["amount_usd"] if billing["observed_at"] else None)],
+    )
+    family(
+        "spaces_reconciliation_delta_bytes",
+        "Billed bytes minus measured bytes month-to-date.",
+        [("", billed - sum(row["bytes_out"] for row in usage) if billed is not None else None)],
+    )
+
+    family(
+        "spaces_sync_success_timestamp_seconds",
+        "Unix time of the last successful sync of each kind.",
+        [
+            (_labels(kind=row["kind"]), datetime.fromisoformat(row["finished_at"]).timestamp())
+            for row in database.query(
+                """SELECT s.kind, s.finished_at FROM sync_runs s JOIN (
+                SELECT kind, MAX(id) id FROM sync_runs WHERE status='ok' GROUP BY kind
+                ) latest ON latest.id=s.id"""
+            )
+        ],
+    )
+    family(
+        "spaces_sync_status",
+        "1 if the most recent sync of this kind succeeded, 0 if it failed.",
+        [
+            (_labels(kind=row["kind"]), int(row["status"] == "ok"))
+            for row in database.query(
+                """SELECT s.kind, s.status FROM sync_runs s JOIN (
+                SELECT kind, MAX(id) id FROM sync_runs GROUP BY kind
+                ) latest ON latest.id=s.id"""
+            )
+        ],
+    )
+    return "\n".join(lines) + "\n"
+
+
 def create_app(config: Config | None = None) -> FastAPI:
     settings = config or load_config()
     database = Database(settings.database_path)
@@ -187,6 +304,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     def readyz():
         database.query("SELECT 1")
         return {"status": "ready"}
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    def metrics():
+        return PlainTextResponse(_metrics(database), media_type="text/plain; version=0.0.4; charset=utf-8")
 
     @app.get("/api/summary")
     def api_summary(period: str = "month"):

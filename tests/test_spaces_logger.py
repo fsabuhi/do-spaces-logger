@@ -167,3 +167,29 @@ def test_dashboard_and_threshold_api(tmp_path: Path):
             headers={"origin": "https://evil.example", "host": "dashboard.example"},
             json={"name": "Bad", "limit_gib": 1},
         ).status_code == 403
+
+
+def test_metrics_endpoint(tmp_path: Path):
+    config = make_config(tmp_path / "db.sqlite", sources=())
+    database = Database(config.database_path)
+    database.initialize()
+    database.execute("INSERT INTO thresholds(bucket,name,limit_bytes) VALUES('quoted\"bucket','Cap',?)", (4 * GIB,))
+    database.record_sync("access", datetime.now(timezone.utc).isoformat(), "ok", "{}")
+    event = AccessEvent(
+        'quoted"bucket', datetime.now(timezone.utc).isoformat(), "origin", "req-1", "x", "GET", "GET",
+        500, None, 3 * GIB, None, None, None, None,
+    )
+    database.ingest_object("logs", "metrics", "etag", [event], 0)
+    with TestClient(create_app(config)) as client:
+        response = client.get("/metrics")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain; version=0.0.4")
+    body = response.text
+    assert "# TYPE spaces_month_bytes_out gauge" in body
+    # Label values must be escaped, and the bucket total must survive the rollup.
+    assert f'spaces_month_bytes_out{{bucket="quoted\\"bucket",source="origin"}} {3 * GIB}' in body
+    assert 'spaces_recent_requests{status_class="5"} 1' in body
+    assert "spaces_cdn_cache_hit_ratio NaN" in body
+    assert "spaces_billing_usage_bytes{period=" in body and "} NaN" in body
+    assert 'spaces_sync_status{kind="access"} 1' in body
+    assert "spaces_sync_success_timestamp_seconds{kind=\"access\"} 1" in body

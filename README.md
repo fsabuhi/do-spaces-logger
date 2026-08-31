@@ -380,8 +380,69 @@ Deployment routes are protected by Caddy authentication.
 - `POST /api/thresholds`
 - `DELETE /api/thresholds/{id}`
 - `POST /api/alerts/test`
+- `GET /metrics`
 - `GET /healthz`
 - `GET /readyz`
+
+FastAPI also serves the generated schema at `/openapi.json` and interactive docs
+at `/docs`.
+
+### Prometheus
+
+`GET /metrics` returns the Prometheus text exposition format, so Grafana,
+Alertmanager, Datadog, and anything else that scrapes can build their own
+dashboards and alert rules on top of the collected usage. It sits behind the
+same Caddy basic auth as the rest of the site:
+
+```yaml
+scrape_configs:
+  - job_name: spaces
+    scrape_interval: 60s
+    scheme: https
+    basic_auth:
+      username: admin
+      password: your-admin-password
+    static_configs:
+      - targets: ["spaces.example.com"]
+```
+
+Exported gauges:
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `spaces_month_bytes_out` | `bucket`, `source` | Bytes served month-to-date |
+| `spaces_month_requests` | `bucket`, `source` | Requests served month-to-date |
+| `spaces_threshold_limit_bytes` | `name`, `bucket` | Configured threshold; empty bucket means all buckets |
+| `spaces_recent_requests` | `status_class` | Requests in the last 15 minutes |
+| `spaces_cdn_cache_hit_ratio` | | CDN cache hit ratio month-to-date |
+| `spaces_billing_usage_bytes` | `period` | Bytes reported by the Billing API |
+| `spaces_billing_amount_usd` | `period` | Bandwidth charges reported by the Billing API |
+| `spaces_reconciliation_delta_bytes` | | Billed bytes minus measured bytes |
+| `spaces_sync_success_timestamp_seconds` | `kind` | Unix time of the last successful sync |
+| `spaces_sync_status` | `kind` | 1 if the most recent sync succeeded, 0 if it failed |
+
+A value with no observation yet is reported as `NaN`, which Prometheus treats as
+absent. Each scrape runs a handful of aggregate queries, so keep the interval at
+30s or slower.
+
+Two rules to start with:
+
+```yaml
+groups:
+  - name: spaces
+    rules:
+      - alert: SpacesSyncStale
+        expr: time() - spaces_sync_success_timestamp_seconds{kind="access"} > 3600
+        annotations:
+          summary: "No successful access-log sync in over an hour"
+
+      - alert: SpacesBandwidthBudget
+        expr: |
+          sum(spaces_month_bytes_out)
+            / min(spaces_threshold_limit_bytes{bucket=""}) > 0.8
+        annotations:
+          summary: "Spaces bandwidth is over 80% of the monthly allowance"
+```
 
 ## Development
 

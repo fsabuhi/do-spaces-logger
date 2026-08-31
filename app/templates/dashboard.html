@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Overview · Spaces Logger{% endblock %}
+{% block content %}
+<div class="heading">
+  <div><h1>Access log overview</h1><p>Log-derived traffic estimates and DigitalOcean billing reconciliation.</p></div>
+  <form method="get"><select name="period" onchange="this.form.submit()">
+    {% for value,label in [('24h','24 hours'),('7d','7 days'),('30d','30 days'),('90d','90 days'),('13m','13 months'),('month','This month')] %}
+    <option value="{{ value }}" {% if summary.period == value %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select></form>
+</div>
+<section class="cards">
+  <article><span>Estimated outbound</span><strong>{{ summary.bytes_out|gib }}</strong></article>
+  <article><span>Requests</span><strong>{{ "{:,}".format(summary.requests) }}</strong></article>
+  <article><span>4xx / 5xx</span><strong>{{ summary.errors_4xx }} / {{ summary.errors_5xx }}</strong></article>
+  <article><span>CDN cache hit rate</span><strong>{{ "{:.1%}".format(summary.cache_hit_rate) if summary.cache_hit_rate is not none else "—" }}</strong></article>
+</section>
+
+<section class="panel">
+  <h2>Hourly bandwidth</h2>
+  {% set peak = summary.series|map(attribute='bytes_out')|max if summary.series else 0 %}
+  <div class="bars" aria-label="Hourly bandwidth chart">
+    {% for point in summary.series[-96:] %}<div title="{{ point.hour }}: {{ point.bytes_out|gib }}" style="height: {{ (point.bytes_out / peak * 100) if peak else 0 }}%"></div>{% endfor %}
+  </div>
+</section>
+
+<div class="grid">
+  <section class="panel"><h2>Buckets</h2><div class="table-wrap"><table>
+    <thead><tr><th>Bucket</th><th>Bandwidth</th><th>Origin</th><th>CDN</th><th>Requests</th></tr></thead>
+    <tbody>{% for row in summary.buckets %}<tr><td>{{ row.bucket }}</td><td>{{ row.bytes_out|gib }}</td><td>{{ row.origin_bytes|gib }}</td><td>{{ row.cdn_bytes|gib }}</td><td>{{ row.requests }}</td></tr>{% else %}<tr><td colspan="5">No access logs ingested yet.</td></tr>{% endfor %}</tbody>
+  </table></div></section>
+  <section class="panel"><h2>Billing reconciliation</h2>
+    {% if summary.billing.observed_at %}
+      <dl><dt>Billing usage</dt><dd>{{ summary.billing.usage_bytes|gib }}</dd><dt>Log estimate delta</dt><dd>{{ summary.reconciliation_delta|gib }}</dd><dt>Observed</dt><dd>{{ summary.billing.observed_at|localtime }}</dd></dl>
+    {% else %}<p>No usable Spaces bandwidth invoice items yet.</p>{% endif %}
+    <p class="muted">Billing and access-log totals can differ because private traffic and protocol accounting are treated differently.</p>
+  </section>
+</div>
+
+<section class="panel"><h2>Top objects by bandwidth</h2><div class="table-wrap"><table>
+  <thead><tr><th>Bucket</th><th>Object</th><th>Bandwidth</th><th>Requests</th></tr></thead>
+  <tbody>{% for row in summary.top_objects %}<tr><td>{{ row.bucket }}</td><td class="key">{{ row.object_key }}</td><td>{{ row.bytes_out|gib }}</td><td>{{ row.requests }}</td></tr>{% else %}<tr><td colspan="4">No objects yet.</td></tr>{% endfor %}</tbody>
+</table></div></section>
+
+<section class="panel"><h2>Sync progress</h2><div class="sync-progress" id="sync-progress">
+{% for item in summary.progress %}{% set percent = (item.objects_scanned / item.objects_total * 100) if item.objects_total else 0 %}<div class="sync-row {{ item.status }}" data-kind="{{ item.kind }}"><div><b>{{ item.kind }}</b> <span class="sync-state">{{ item.status }}</span></div><div class="sync-detail"><span class="sync-counts">{% if item.message.startswith('Counting') %}{{ item.message }}{% else %}{{ item.objects_scanned }} / {{ item.objects_total }} ({{ '%.1f'|format(percent) }}%) · {{ item.objects_imported }} imported · {{ item.objects_skipped }} skipped · {{ item.requests_imported }} requests{% endif %}</span><div class="progress-track"><span style="width:{{ percent }}%"></span></div></div><span class="sync-key">{{ item.current_key or item.message }}</span></div>{% else %}<p class="empty">No sync has started.</p>{% endfor %}
+</div></section>
+<script>
+const progress = document.querySelector('#sync-progress');
+async function refreshProgress() {
+  try {
+    const rows = await fetch('/api/sync/progress').then(response => response.json());
+    if (!rows.length) return;
+    progress.replaceChildren(...rows.map(row => {
+      const div = document.createElement('div');
+      div.className = `sync-row ${row.status}`;
+      const title = document.createElement('div');
+      const strong = document.createElement('b');
+      strong.textContent = row.kind;
+      title.append(strong, ` ${row.status}`);
+      const counts = document.createElement('span');
+      const counting = row.message.startsWith('Counting');
+      const percent = row.objects_total ? row.objects_scanned / row.objects_total * 100 : 0;
+      counts.textContent = counting ? row.message : `${row.objects_scanned} / ${row.objects_total} (${percent.toFixed(1)}%) · ${row.objects_imported} imported · ${row.objects_skipped} skipped · ${row.requests_imported} requests`;
+      const detail = document.createElement('div');
+      detail.className = 'sync-detail';
+      const track = document.createElement('div');
+      track.className = 'progress-track';
+      const fill = document.createElement('span');
+      fill.style.width = `${percent}%`;
+      track.append(fill);
+      detail.append(counts, track);
+      const key = document.createElement('span');
+      key.className = 'sync-key';
+      key.textContent = row.current_key || row.message;
+      div.append(title, detail, key);
+      return div;
+    }));
+  } catch (_) {}
+}
+setInterval(refreshProgress, 3000);
+</script>
+{% endblock %}

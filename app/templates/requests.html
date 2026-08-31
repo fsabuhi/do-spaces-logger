@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Requests · Spaces Logger{% endblock %}
+{% block content %}
+<div class="heading"><div><h1>Request explorer</h1><p>Compact request details are retained for 30 days.</p></div></div>
+<section class="panel">
+  <form class="filters" method="get"><label>Bucket<input name="bucket" value="{{ bucket }}"></label><label>Source<select name="source"><option value="">All</option><option value="origin" {% if source=='origin' %}selected{% endif %}>Origin</option><option value="cdn" {% if source=='cdn' %}selected{% endif %}>CDN</option></select></label><button>Filter</button></form>
+  <div class="table-wrap"><table><thead><tr><th>Time</th><th>Bucket</th><th>Source</th><th>Method</th><th>Status</th><th>Object</th><th>Bytes</th><th>Client network</th></tr></thead>
+  <tbody>{% for row in result['items'] %}<tr><td>{{ row.occurred_at|localtime }}</td><td>{{ row.bucket }}</td><td>{{ row.source }}</td><td>{{ row.method }}</td><td>{{ row.status }}</td><td class="key">{{ row.object_key }}</td><td>{{ row.bytes_out }}</td><td>{{ row.client_network or '—' }}</td></tr>{% else %}<tr><td colspan="8">No matching requests.</td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endblock %}

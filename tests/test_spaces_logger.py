@@ -88,6 +88,13 @@ def test_ingestion_is_idempotent_and_rolls_back(tmp_path: Path):
     assert db.ingest_object("logs", "two", "etag-2", events, 0) == 0
     assert db.query("SELECT SUM(bytes_out) value FROM hourly_usage")[0]["value"] == 123
 
+    # DigitalOcean CDN logs repeat one edge request id; distinct and repeated rows must all count once.
+    row = CLOUDFRONT.splitlines()[2]
+    cdn_log = "\n".join([*CLOUDFRONT.splitlines()[:2], row, row, row.replace("21:02:31", "21:02:32")])
+    cdn, _ = parse_access_log(cdn_log.encode(), "bucket")
+    assert db.ingest_object("logs", "cdn-1", "etag-c1", cdn, 0) == 3
+    assert db.ingest_object("logs", "cdn-2", "etag-c2", parse_access_log(cdn_log.encode(), "bucket")[0], 0) == 0
+
     broken = AccessEvent(**{**events[0].__dict__, "request_id": "new", "source": "invalid"})
     with pytest.raises(Exception):
         db.ingest_object("logs", "broken", "etag-3", [broken], 0)

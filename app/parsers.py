@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import ipaddress
 import shlex
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import unquote
@@ -92,6 +94,7 @@ def parse_access_log(payload: bytes, fallback_bucket: str | None = None) -> tupl
     cloudfront_fields: list[str] | None = None
     events: list[AccessEvent] = []
     rejected = 0
+    seen_lines: Counter[str] = Counter()
     for line in lines:
         line = line.strip()
         if not line:
@@ -108,12 +111,17 @@ def parse_access_log(payload: bytes, fallback_bucket: str | None = None) -> tupl
                     raise ValueError("CloudFront field count mismatch")
                 item = dict(zip(cloudfront_fields, values, strict=True))
                 occurred = datetime.fromisoformat(f"{item['date']}T{item['time']}+00:00")
+                # DigitalOcean CDN logs repeat one x-edge-request-id on every row, so it cannot
+                # deduplicate. Hash the line instead; the occurrence count keeps identical
+                # requests within a file distinct while re-imports still dedupe.
+                digest = hashlib.sha1(line.encode()).hexdigest()
+                seen_lines[digest] += 1
                 events.append(
                     AccessEvent(
                         bucket=_cdn_bucket(item, fallback_bucket),
                         occurred_at=occurred.isoformat(),
                         source="cdn",
-                        request_id=item["x-edge-request-id"],
+                        request_id=f"{digest}-{seen_lines[digest]}",
                         object_key=unquote(item.get("cs-uri-stem", "").lstrip("/")),
                         operation=item.get("cs-method", "-"),
                         method=item.get("cs-method", "-"),

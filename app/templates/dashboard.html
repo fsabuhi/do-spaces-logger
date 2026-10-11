@@ -4,7 +4,7 @@
 <div class="heading">
   <div><h1>Access log overview</h1><p>Log-derived traffic estimates and DigitalOcean billing reconciliation.</p></div>
   <form method="get"><select name="period" onchange="this.form.submit()">
-    {% for value,label in [('24h','24 hours'),('7d','7 days'),('30d','30 days'),('90d','90 days'),('13m','13 months'),('month','This month')] %}
+    {% for value,label in [('24h','24 hours'),('7d','7 days'),('14d','14 days'),('30d','30 days'),('90d','90 days'),('13m','13 months'),('month','This month')] %}
     <option value="{{ value }}" {% if summary.period == value %}selected{% endif %}>{{ label }}</option>
     {% endfor %}
   </select></form>

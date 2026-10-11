@@ -37,6 +37,8 @@ def _start_for(period: str) -> datetime:
         return now - timedelta(hours=24)
     if period == "7d":
         return now - timedelta(days=7)
+    if period == "14d":
+        return now - timedelta(days=14)
     if period == "30d":
         return now - timedelta(days=30)
     if period == "90d":
@@ -45,7 +47,7 @@ def _start_for(period: str) -> datetime:
         return now - timedelta(days=396)
     if period == "month":
         return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    raise HTTPException(400, "period must be 24h, 7d, 30d, 90d, 13m, or month")
+    raise HTTPException(400, "period must be 24h, 7d, 14d, 30d, 90d, 13m, or month")
 
 
 def _same_origin(request: Request) -> None:
